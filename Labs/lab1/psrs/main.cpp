@@ -5,120 +5,115 @@
 #include <ctime>
 #include <omp.h>
 #include <vector>
+#include <chrono>
+#include <climits>
+#include <map>
+#include <algorithm>
 
-#define NUM_THREADS 5
+#define NUM_THREADS 4
 
-#define RANDOM_LIMIT 100
-#define TEST_SIZE 50
+#define TEST_SIZE 16000000
 
-using namespace std;
-const int p = 10;
 double RandomGenerateNumber() {
     return rand() % INT16_MAX;
 }
+int swap_map[TEST_SIZE] = {0};
 
-void swap(int& a, int& b) {
-    int temp = a;
-    a = b;
-    b = temp;
-}
-
-int partition(vector<int>& array, int left, int right) {
-    int x = array[right];
-    int i = left - 1;
-    for (int j = left; j < right; j++) {
-        if (array[j] <= x) {
-            swap(array[++i], array[j]);
-        }
-    }
-    swap(array[i + 1], array[right]);
-    return i + 1;
-}
-
-void quickSort(vector<int>& array, int left, int right) {
-    if (left < right) {
-        int q = partition(array, left, right);
-        quickSort(array, left, q - 1);
-        quickSort(array, q + 1, right);
-    }
-}
-
-void PSRSSort(vector<int>& array, int length) {
-    int base = length / NUM_THREADS;
-    vector<int> sample(NUM_THREADS * NUM_THREADS);
-    vector<int> pivot(NUM_THREADS - 1);
-    vector<vector<int> > count(NUM_THREADS, vector<int>(NUM_THREADS, 0));
-    vector<vector<vector<int> > > pivotArray(NUM_THREADS, vector<vector<int> >(NUM_THREADS, vector<int>(50, 0)));
-
+void PSRS_Sort(std::vector<int>& array, int length) {
+    int sample[NUM_THREADS * NUM_THREADS];  //共p^2个样本元素
+    int range = length / NUM_THREADS;  //每个线程处理的元素个数 即n/p
     omp_set_num_threads(NUM_THREADS);
 
     #pragma omp parallel
     {
         int id = omp_get_thread_num();
-        quickSort(array, id * base, (id + 1) * base - 1);   // 局部排序
-
-        for (int j = 0; j < NUM_THREADS; j++) {
-            sample[id * NUM_THREADS + j] = array[id * base + (j + 1) * base / (NUM_THREADS + 1)];   //选取样本
+        std::sort(array.begin() + id * range, array.begin() + (id + 1) * range);    //局部排序
+        for(int i = 0; i < NUM_THREADS; i++) {
+            sample[id * NUM_THREADS + i] = array[id * range + i * range / NUM_THREADS];  //每个线程选取p个样本元素
         }
+    }   
+    
+    std::sort(sample, sample + NUM_THREADS * NUM_THREADS);  //对样本元素进行排序
 
-        #pragma omp barrier
-        #pragma omp master
-        {
-            quickSort(sample, 0, NUM_THREADS * NUM_THREADS - 1);    //样本排序
-
-            for (int i = 1; i < NUM_THREADS; i++) {
-                pivot[i - 1] = sample[i * NUM_THREADS]; //选择主元
+    int pivot[NUM_THREADS - 1];  //选取p-1个主元
+    for(int i = 0; i < NUM_THREADS - 1; i++) {
+        pivot[i] = sample[(i + 1) * NUM_THREADS];
+    }
+    
+    #pragma omp parallel
+    {   //主元划分
+        int id = omp_get_thread_num();
+        int start = id * range;
+        int end = (id + 1) * range;
+        for (int i = start; i < end; i++){
+            int j = 0;
+            
+            while (j < NUM_THREADS - 1) {
+                if (array[i] <= pivot[j]) {
+                    break;
+                }
+                j++;
             }
+            swap_map[i] = j;
         }
-
-        #pragma omp barrier
-
-        for (int k = 0, m = 0; k < base; k++) {
-            if (array[id * base + k] < pivot[m]) {
-                pivotArray[id][m][count[id][m]++] = array[id * base + k];   
-            } else {
-                m != NUM_THREADS - 1 ? m++ : 0;
-                pivotArray[id][m][count[id][m]++] = array[id * base + k];
-            }
-        }   //主元划分
-
-        #pragma omp barrier
-
-        for (int k = 0; k < NUM_THREADS; k++) {
-            if (k != id) {
-                memcpy(pivotArray[id][id].data() + count[id][id], pivotArray[k][id].data(), sizeof(int) * count[k][id]);
-                count[id][id] += count[k][id];
-            }
-        }   //全局交换
-
-        quickSort(pivotArray[id][id], 0, count[id][id] - 1);    //归并排序
     }
 
-
-    cout << "The Sorted Array is:" << endl;
-    for (int x = 0; x < NUM_THREADS; x++) {
-        for (int y = 0; y < count[x][x]; y++) {
-            cout << pivotArray[x][x][y] << " ";
-        }
-        cout << endl;
+    int count[NUM_THREADS] = {0};
+    
+    for (int i = 0; i < length; i++){  //统计每个段的元素个数
+        count[swap_map[i]]++;
     }
+    
+    int offset[NUM_THREADS] = {0};
+    offset[0] = 0;
+    for(int i = 1; i < NUM_THREADS; i++){  //计算每个段的起始位置
+        offset[i] = offset[i-1] + count[i-1];
+    }
+    
+    std::vector<int> temp(array);
+    int cnt[NUM_THREADS] = {0};
+    
+    for(int i = 0; i < length; i++){  //根据map进行交换
+        array[offset[swap_map[i]] + cnt[swap_map[i]]] = temp[i];
+        cnt[swap_map[i]]++;
+    }
+    
+    #pragma omp parallel
+    { 
+        int id = omp_get_thread_num();
+        if(id != NUM_THREADS - 1)
+            std::sort(array.begin() + offset[id], array.begin() + offset[id+1]);    //局部排序
+        else
+            std::sort(array.begin() + offset[id], array.end());    //局部排序
+    }
+    
 }
 
 int main(int argc, char* argv[]) {
     srand(static_cast<unsigned int>(time(NULL)));
-    vector<int> arr(TEST_SIZE);
+    std::vector<int> arr(TEST_SIZE);
     for (int i = 0; i < TEST_SIZE; i++) {
         arr[i] = static_cast<int>(RandomGenerateNumber());
     }
-
-    cout << "The Original Array is:" << endl;
-    for (int i = 0; i < p; i++) {
-        for (int j = 0; j < TEST_SIZE / p; j++) {
-            cout << arr[i * (TEST_SIZE / p) + j] << " ";
-        }
-        cout << endl;
+    
+    auto start = std::chrono::system_clock::now();
+    PSRS_Sort(arr, TEST_SIZE);
+    auto end = std::chrono::system_clock::now();
+    std::cout << "Is sorted:" << bool(is_sorted(arr.begin(), arr.end())) << std::endl;
+    auto duration = duration_cast<std::chrono::microseconds>(end - start);
+    std::cout << "并行时间:" << double(duration.count()) * std::chrono::microseconds::period::num << std::endl;
+    
+    for (int i = 0; i < TEST_SIZE; i++) {
+        arr[i] = static_cast<int>(RandomGenerateNumber());
     }
-    PSRSSort(arr, TEST_SIZE);
+    auto start1 = std::chrono::system_clock::now();
+    std::sort(arr.begin(), arr.end());
+    auto end1 = std::chrono::system_clock::now();
+    std::cout << "Is sorted:" << bool(is_sorted(arr.begin(), arr.end())) << std::endl;
+    auto duration1 = duration_cast<std::chrono::microseconds>(end1 - start1);
+    std::cout << "串行时间:" << double(duration1.count()) * std::chrono::microseconds::period::num << std::endl;
 
+    std::cout << "加速比:" << double(duration1.count()) * std::chrono::microseconds::period::num / double(duration.count()) * std::chrono::microseconds::period::num << std::endl;
+    
     return 0;
 }
