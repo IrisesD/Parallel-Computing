@@ -7,7 +7,7 @@
 #include <climits>
 
 using namespace std;
-#define TEST_SIZE 100000
+#define TEST_SIZE 20000000
 #define BLOCKSIZE 16
 double RandomGenerateNumber() {
     return rand() % 10;
@@ -43,6 +43,7 @@ int main(){
             return 0;
         }
     }
+    cout << "数组规模:" << TEST_SIZE << endl;
     cout << "串行时间:" << double(duration.count()) * chrono::microseconds::period::num << endl;
     //基于cuda的并行加法
     int* cuda_A, * cuda_B, * cuda_C;
